@@ -6,6 +6,8 @@ __pycache__/
 # C extensions
 *.so
 
+reconchess_custom
+
 # Distribution / packaging
 .Python
 build/
