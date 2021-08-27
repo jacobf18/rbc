@@ -13,14 +13,13 @@ def self_play(num_iters = 1):
     net = Net()
 
     for i in range(num_iters):
-        examples = []
         # Execute self-play game
-        bot1 = AlphaRBC()
+        bot1 = AlphaRBC(lookback=3)
         bot2 = RandomBot()
         winner_color, win_reason, game_history = play.play_local_game(bot1, bot2)
 
-        # examples.extend(bot1.examples)
-        # examples.extend(bot2.examples)
+        examples = bot1.example_history[3:]
+        print(len(examples))
 
         # train(net, examples)
 

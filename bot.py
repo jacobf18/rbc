@@ -1,19 +1,25 @@
 import random
 import utils
 from reconchess import *
-from MCTS import MCTS
 import torch
 import reconchess.utilities as rbc_utils
+from RBCExample import RBCExample
 
 class AlphaRBC(Player):
-    def __init__(self):
+    def __init__(self, lookback = 3):
         self.board_history = [] # will be the one-hot encoding so that we don't have to reparse the baord
+        self.example_history = []
         self.board = None
         self.color = None
-        # self.mcts = MCTS()
-        self.examples = [1]
 
+        self.sense_coord = None
         self.sense_board = torch.zeros(8,8)
+
+        self.lookback = lookback
+
+        self.sense_history = []
+
+        self.is_start = True
 
     def handle_game_start(self, color: Color, board: chess.Board, opponent_name: str):
         self.board = board
@@ -30,42 +36,13 @@ class AlphaRBC(Player):
         # Reset sense_board
         self.sense_board *= 0
 
-        choices = torch.tensor(sense_actions).reshape(8,8)
         sense_square = random.choice(sense_actions)
 
         choice_row = int(sense_square / 8)
         choice_col = sense_square % 8
-        
-        # Center square
-        self.sense_board[choice_row, choice_col] = 1
-        
-        # Corners
-        # Top left
-        if choice_row != 0 and choice_col != 0:
-            self.sense_board[choice_row - 1, choice_col - 1] = 1
-        # Top right
-        if choice_row != 0 and choice_col != 7:
-            self.sense_board[choice_row - 1, choice_col + 1] = 1
-        # Bottom left
-        if choice_row != 7 and choice_col != 0:
-            self.sense_board[choice_row + 1, choice_col - 1] = 1
-        # Bottom right
-        if choice_row != 7 and choice_col != 7:
-            self.sense_board[choice_row + 1, choice_col + 1] = 1
-        
-        # Sides
-        # Top
-        if choice_row != 0:
-            self.sense_board[choice_row - 1, choice_col] = 1
-        # Left
-        if choice_col != 0:
-            self.sense_board[choice_row, choice_col - 1] = 1
-        # Right
-        if choice_col != 7:
-            self.sense_board[choice_row, choice_col + 1] = 1
-        # Bottom
-        if choice_row != 7:
-            self.sense_board[choice_row + 1, choice_col] = 1
+
+        self.sense_coord = (choice_row, choice_col)
+        self.sense_history.append(self.sense_coord)
 
         return sense_square
 
@@ -79,40 +56,29 @@ class AlphaRBC(Player):
         self.board.clear_stack() # remove stack because we keep playing same color
 
         # Convert board to a proper state to feed to the network
-        num_actions = len(move_actions)
-        lookback = 10
-        num_channels = 13
-        state_action = torch.zeros(num_actions, num_channels, lookback + 2, 8, 8)
-
-        # Populate the current board
-        board = torch.from_numpy(utils.one_hot_encoding(self.board.epd()))
-        state_action[:,:num_channels - 1,lookback:lookback + 1,:,:] = torch.unsqueeze(board, 1).repeat(num_actions,1,1,1,1)
-
-        # Populate what we can see
-        state_action[:,num_channels - 1:num_channels,lookback:lookback+2] = self.sense_board.expand(1,1,1,8,8).repeat(num_actions,1,1,1,1)
-
-        # Populate the history
-        history = self.board_history[-lookback:]
-        for i in range(len(history)):
-            ind = len(history) - i - 1
-            state_action[:,:,ind:ind+1] = history[ind].repeat(num_actions,1,1,1,1)
-        
-        # Add the current board configuration to the history
-        self.board_history += [state_action[0, :, lookback: lookback + 1, :, :]]
+        board_str = self.board.epd().split(" ", 1)[0]
 
         # Populate actions
-        for i, action in enumerate(move_actions):
-            temp_board = self.board.copy(stack = False)
-            temp_board.push(action)
+        actions_strs = []
+        for action in move_actions:
+            temp_board = self.board.copy(stack = False) # copy current board
+            temp_board.push(action) # push the action
 
-            # Convert to one-hot encoding
-            move_one_hot = torch.from_numpy(utils.one_hot_encoding(temp_board.epd()))
+            actions_strs.append(temp_board.epd().split(" ", 1)[0])
 
-            # Add each action's one-hot encoding to the state tensor
-            state_action[i,:num_channels - 1,lookback + 1:lookback + 2,:,:] = torch.unsqueeze(move_one_hot, 1)
+        # Repeat starting board to start history
+        if self.is_start:
+            self.example_history = [RBCExample(board = board_str, coord = self.sense_coord) for _ in range(self.lookback)]
+            self.is_start = False
+        # Add to examples
+        example = RBCExample(board = board_str,
+                            coord = self.sense_coord,
+                            actions = actions_strs,
+                            prev_examples=self.example_history[-self.lookback:])
+        example.convert_to_tensor()
+        self.example_history.append(example)
 
         # TODO: Run through net to get Q value and probs
-
         return random.choice(move_actions + [None])
 
     def handle_move_result(self, requested_move: Optional[chess.Move], taken_move: Optional[chess.Move],
